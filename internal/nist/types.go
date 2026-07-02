@@ -59,6 +59,6 @@ type Finding struct {
 	Status           FindingStatus `json:"status"`
 	Severity         Severity      `json:"severity"`
 	AccountsAffected int           `json:"accounts_affected"`
-	RMFStep          string        `json:"rmf_step"`        // e.g. "Assess", "Monitor", "Implement"
+	RMFStep          string        `json:"rmf_step"`         // e.g. "Assess", "Monitor", "Implement"
 	MinImpactLevel   ImpactLevel   `json:"min_impact_level"` // lowest DoD CC SRG Impact Level at which this control is required for a Mission Owner
 }
