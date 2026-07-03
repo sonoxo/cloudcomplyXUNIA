@@ -50,6 +50,8 @@ go build -ldflags="-s -w" -o cloudcomply .
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o cloudcomply-linux-amd64 .
 ```
 
+See [CLI.md](CLI.md) for the full command reference, including headless `report nist` usage for CI/scripting.
+
 ---
 
 ## Navigation
@@ -104,7 +106,7 @@ For cross-account checks: add `sts:AssumeRole` and a trust policy in member acco
 | Dashboard + NIST compliance score | ✅ Done |
 | Findings browser (with family filter) | ✅ Done |
 | Demo mode (realistic fake data) | ✅ Done |
-| Cobra CLI command structure | 🔲 Planned |
+| Cobra CLI command structure | ✅ Done |
 | Live Security Hub integration | 🔲 Planned |
 | Threat modeling wizard | 🔲 Planned |
 | Best practices custom checks | 🔲 Planned |
