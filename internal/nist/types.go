@@ -62,3 +62,10 @@ type Finding struct {
 	RMFStep          string        `json:"rmf_step"`         // e.g. "Assess", "Monitor", "Implement"
 	MinImpactLevel   ImpactLevel   `json:"min_impact_level"` // lowest DoD CC SRG Impact Level at which this control is required for a Mission Owner
 }
+
+// OrgSummary is a lightweight snapshot of the AWS Organization being assessed,
+// sourced from either demo data or a live Organizations API call.
+type OrgSummary struct {
+	Name         string `json:"name"`
+	AccountCount int    `json:"account_count"`
+}

@@ -25,6 +25,23 @@ func (m model) View() string {
 func (m model) dashboardView() string {
 	header := titleStyle.Render("cloudcomply — AWS Org Compliance Dashboard")
 
+	if m.loading {
+		return fmt.Sprintf("%s\n\n  %s Loading findings...\n", header, m.spinner.View())
+	}
+
+	if m.loadErr != nil {
+		errBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("196")).
+			Padding(1, 2).
+			Margin(1, 2).
+			Width(70).
+			Foreground(lipgloss.Color("196")).
+			Render(fmt.Sprintf("Failed to load Security Hub findings:\n%v\n\nRetry, or run with --demo for offline demo data.", m.loadErr))
+		help := helpStyle.Render("q: quit")
+		return fmt.Sprintf("%s\n\n%s\n\n%s", header, errBox, help)
+	}
+
 	scoreColor := "42" // green
 	if m.complianceScore < 70 {
 		scoreColor = "196" // red

@@ -1,8 +1,13 @@
 package tui
 
 import (
+	"context"
+	"time"
+
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"cloudcomply/internal/nist"
 )
@@ -14,10 +19,37 @@ const (
 	viewFindings
 )
 
+// FindingsFetcher sources findings and an org summary — from demo data or a
+// live AWS call, the tui package doesn't need to know which.
+type FindingsFetcher func(ctx context.Context) ([]nist.Finding, nist.OrgSummary, error)
+
+const fetchTimeout = 30 * time.Second
+
+// findingsMsg carries the result of an async FindingsFetcher call back into
+// the Bubble Tea update loop.
+type findingsMsg struct {
+	findings []nist.Finding
+	org      nist.OrgSummary
+	err      error
+}
+
+func fetchCmd(fetch FindingsFetcher) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		findings, org, err := fetch(ctx)
+		return findingsMsg{findings: findings, org: org, err: err}
+	}
+}
+
 type model struct {
 	// shared
 	currentView view
 	quitting    bool
+	fetch       FindingsFetcher
+	loading     bool
+	loadErr     error
+	spinner     spinner.Model
 
 	// dashboard
 	orgName         string
@@ -38,17 +70,20 @@ type model struct {
 	impactFilter  string
 }
 
-func initialModel() model {
-	findings := nist.DemoFindings()
+func initialModel(fetch FindingsFetcher) model {
 	families := []string{"ALL", "AC", "AU", "CM", "IA", "SC", "SI"}
 	impactLevels := []string{"ALL", string(nist.IL2), string(nist.IL4), string(nist.IL5), string(nist.IL6)}
 
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+
 	return model{
-		currentView:     viewDashboard,
-		orgName:         "Acme Federal Org",
-		accountCount:    47,
-		complianceScore: nist.ComplianceScore(findings),
-		selected:        0,
+		currentView: viewDashboard,
+		fetch:       fetch,
+		loading:     true,
+		spinner:     s,
+		selected:    0,
 		menuItems: []string{
 			"Run Full NIST Compliance Scan",
 			"Browse Findings by Control Family",
@@ -56,8 +91,7 @@ func initialModel() model {
 			"View Best Practices Report",
 			"Quit",
 		},
-		findings:      findings,
-		findingsTable: buildTable(findings, "ALL", "ALL"),
+		findingsTable: buildTable(nil, "ALL", "ALL"),
 		families:      families,
 		familyIdx:     0,
 		familyFilter:  "ALL",
@@ -67,9 +101,33 @@ func initialModel() model {
 	}
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, fetchCmd(m.fetch))
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case findingsMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.loadErr = msg.err
+			return m, nil
+		}
+		m.findings = msg.findings
+		m.orgName = msg.org.Name
+		m.accountCount = msg.org.AccountCount
+		m.complianceScore = nist.ComplianceScore(m.findings)
+		m.findingsTable = buildTable(m.findings, m.familyFilter, m.impactFilter)
+		return m, nil
+	case spinner.TickMsg:
+		if !m.loading {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+
 	switch m.currentView {
 	case viewDashboard:
 		return m.updateDashboard(msg)
