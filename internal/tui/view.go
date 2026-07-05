@@ -25,6 +25,23 @@ func (m model) View() string {
 func (m model) dashboardView() string {
 	header := titleStyle.Render("cloudcomply — AWS Org Compliance Dashboard")
 
+	if m.loading {
+		return fmt.Sprintf("%s\n\n  %s Loading findings...\n", header, m.spinner.View())
+	}
+
+	if m.loadErr != nil {
+		errBox := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("196")).
+			Padding(1, 2).
+			Margin(1, 2).
+			Width(70).
+			Foreground(lipgloss.Color("196")).
+			Render(fmt.Sprintf("Failed to load Security Hub findings:\n%v\n\nRetry, or run with --demo for offline demo data.", m.loadErr))
+		help := helpStyle.Render("q: quit")
+		return fmt.Sprintf("%s\n\n%s\n\n%s", header, errBox, help)
+	}
+
 	scoreColor := "42" // green
 	if m.complianceScore < 70 {
 		scoreColor = "196" // red
@@ -44,14 +61,22 @@ func (m model) dashboardView() string {
 	il5Str := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(il5Color)).
 		Render(fmt.Sprintf("%d%% ready", il5Score))
 
+	orgLabel, accountsLabel := "Organization:", "Accounts in Org:"
+	if !m.isOrgMode {
+		orgLabel, accountsLabel = "Account:", "Accounts Scanned:"
+	}
 	summary := fmt.Sprintf(
 		"%-29s%s\n%-29s%d\n%-29s%s\n%-29s%s",
-		"Organization:", m.orgName,
-		"Accounts in Org:", m.accountCount,
+		orgLabel, m.orgName,
+		accountsLabel, m.accountCount,
 		"NIST 800-53:", scoreStr,
 		"DoD SRG (IL5 Mission Owner):", il5Str,
 	)
 	summaryBox := boxStyle.Render(summary)
+	if !m.isOrgMode {
+		summaryBox += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).
+			Render("ℹ Single-account mode — no AWS Organization detected. Org-wide scoring will apply once org access is available.")
+	}
 
 	menu := "Main Menu:\n\n"
 	for i, item := range m.menuItems {

@@ -62,3 +62,15 @@ type Finding struct {
 	RMFStep          string        `json:"rmf_step"`         // e.g. "Assess", "Monitor", "Implement"
 	MinImpactLevel   ImpactLevel   `json:"min_impact_level"` // lowest DoD CC SRG Impact Level at which this control is required for a Mission Owner
 }
+
+// OrgSummary is a lightweight snapshot of the AWS Organization being assessed,
+// sourced from either demo data or a live Organizations API call.
+type OrgSummary struct {
+	Name         string `json:"name"`
+	AccountCount int    `json:"account_count"`
+	// IsOrgMode is false when the credentials in use aren't part of an AWS
+	// Organization at all (AWSOrganizationsNotInUseException) — cloudcomply
+	// falls back to scoring the single account rather than failing outright,
+	// since org-wide access is often gated behind separate approval.
+	IsOrgMode bool `json:"is_org_mode"`
+}

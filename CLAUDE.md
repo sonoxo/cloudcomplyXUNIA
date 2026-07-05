@@ -7,6 +7,7 @@ Project context for Claude Code. Read this before making any changes.
 A lightweight Go CLI/TUI tool for assessing AWS Organizations against NIST SP 800-53 / RMF controls. The primary audience is Cloud Security Engineers and GRC practitioners working toward ATO packages or continuous compliance monitoring.
 
 Key design constraints:
+
 - **Zero installation in AWS CloudShell** — ships as a single static Linux binary
 - **Low profile** — no agents, no sidecars, no persistent install
 - **Termux-compatible** — must work well in a mobile terminal with external keyboard
@@ -28,6 +29,7 @@ Key design constraints:
 ### Hybrid TUI / CLI model
 
 The tool has two modes:
+
 - **Interactive (default):** `cloudcomply` with no args launches the Bubble Tea dashboard
 - **Headless (planned):** `cloudcomply report nist --format json` for scripting/CI
 
@@ -38,6 +40,7 @@ Do not collapse these into one. Keep TUI and non-interactive paths separate.
 Views are defined as `type view int` constants. The main `model` struct holds a `currentView` field. Each view has its own `update*` and `*View` methods. This pattern should be followed when adding new views — do not embed all logic in a single Update/View function.
 
 Current views:
+
 - `viewDashboard` — org summary + compliance score + main menu
 - `viewFindings` — NIST 800-53 findings table with control family and DoD SRG Impact Level filter tabs
 
@@ -103,6 +106,10 @@ go mod tidy
 3. **Live Security Hub integration** — `internal/awsclient/` package, `GetFindings` with NIST standard filter + org scope, async tea.Cmd pattern
 4. **Threat modeling wizard** — `huh` forms, STRIDE categories, Markdown output
 5. **Report export** — `--format markdown|json|html`, output suitable for ATO evidence packages
+6. **Stabilize headless JSON output** — lock the `report nist --format json` schema before anything automated depends on it; this becomes an on-disk contract once item 8 lands, not just a CLI convenience
+7. **Scheduled Lambda execution** — thin handler (new `internal/lambda` or `cmd/lambda`) that calls the same `newFetcher`/`GetNISTFindings` path as `report nist` directly as a library, not by shelling out to the binary. Triggered by EventBridge Scheduler on a per-org cadence (daily/weekly/configurable). This is a separate deployable surface from the core binary — keep it additive, don't let it pull scheduling/AWS-deployment concerns into `cmd/` or `internal/tui`
+8. **S3 result storage + drift detection** — one JSON object per run (`runs/{org-id}/{yyyy-mm-dd}/{unix-ts}.json`, plus a `latest.json` pointer per org); new `internal/drift` package with a pure `Compare(prev, curr []nist.Finding) []DriftEvent` function, no AWS SDK dependency, unit-testable like `buildTable()`
+9. **Continuous control monitoring dashboard** — direction not yet decided (AWS-native QuickSight/Athena or CloudWatch metrics vs. a bespoke web app vs. a history/drift view added to the existing TUI). The bespoke-web-app option is the one path here that conflicts with the "no persistent install" constraint above — revisit once item 8 produces real drift data to look at
 
 ## IAM Requirements (for live mode)
 

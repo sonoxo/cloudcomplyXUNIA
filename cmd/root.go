@@ -10,12 +10,21 @@ import (
 	"cloudcomply/internal/tui"
 )
 
+// demoMode is a persistent flag shared by the TUI and `report nist` — see
+// cmd/fetch.go. Default is live AWS calls; --demo opts into the old
+// fake-data-only behavior.
+var demoMode bool
+
 var rootCmd = &cobra.Command{
 	Use:   "cloudcomply",
 	Short: "Assess AWS Organizations against NIST SP 800-53 / RMF controls",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return tui.Run()
+		return tui.Run(newFetcher(demoMode))
 	},
+}
+
+func init() {
+	rootCmd.PersistentFlags().BoolVar(&demoMode, "demo", false, "use built-in demo data instead of live AWS Security Hub calls")
 }
 
 // Execute runs the CLI. version/commit/date come from ldflags set at build

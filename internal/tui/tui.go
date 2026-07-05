@@ -5,9 +5,10 @@ package tui
 import tea "github.com/charmbracelet/bubbletea"
 
 // Run launches the full-screen interactive dashboard and blocks until the
-// user quits.
-func Run() error {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+// user quits. fetch supplies the findings and org summary — from demo data
+// or a live AWS call — asynchronously on startup.
+func Run(fetch FindingsFetcher) error {
+	p := tea.NewProgram(initialModel(fetch), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
