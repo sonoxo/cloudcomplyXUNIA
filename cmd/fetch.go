@@ -28,7 +28,7 @@ func newFetcher(demo bool) tui.FindingsFetcher {
 		if err != nil {
 			return nil, nist.OrgSummary{}, fmt.Errorf("connecting to AWS: %w (try --demo)", err)
 		}
-		if _, err := client.WhoAmI(ctx); err != nil {
+		if _, err = client.WhoAmI(ctx); err != nil {
 			return nil, nist.OrgSummary{}, fmt.Errorf("no valid AWS credentials found: %w (try --demo)", err)
 		}
 		findings, err := client.GetNISTFindings(ctx)
