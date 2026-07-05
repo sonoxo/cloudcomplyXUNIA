@@ -61,14 +61,22 @@ func (m model) dashboardView() string {
 	il5Str := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(il5Color)).
 		Render(fmt.Sprintf("%d%% ready", il5Score))
 
+	orgLabel, accountsLabel := "Organization:", "Accounts in Org:"
+	if !m.isOrgMode {
+		orgLabel, accountsLabel = "Account:", "Accounts Scanned:"
+	}
 	summary := fmt.Sprintf(
 		"%-29s%s\n%-29s%d\n%-29s%s\n%-29s%s",
-		"Organization:", m.orgName,
-		"Accounts in Org:", m.accountCount,
+		orgLabel, m.orgName,
+		accountsLabel, m.accountCount,
 		"NIST 800-53:", scoreStr,
 		"DoD SRG (IL5 Mission Owner):", il5Str,
 	)
 	summaryBox := boxStyle.Render(summary)
+	if !m.isOrgMode {
+		summaryBox += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).
+			Render("ℹ Single-account mode — no AWS Organization detected. Org-wide scoring will apply once org access is available.")
+	}
 
 	menu := "Main Menu:\n\n"
 	for i, item := range m.menuItems {

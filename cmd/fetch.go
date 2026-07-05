@@ -20,7 +20,7 @@ const fetchTimeout = 30 * time.Second
 func newFetcher(demo bool) tui.FindingsFetcher {
 	if demo {
 		return func(ctx context.Context) ([]nist.Finding, nist.OrgSummary, error) {
-			return nist.DemoFindings(), nist.OrgSummary{Name: "Acme Federal Org", AccountCount: 47}, nil
+			return nist.DemoFindings(), nist.OrgSummary{Name: "Acme Federal Org", AccountCount: 47, IsOrgMode: true}, nil
 		}
 	}
 	return func(ctx context.Context) ([]nist.Finding, nist.OrgSummary, error) {

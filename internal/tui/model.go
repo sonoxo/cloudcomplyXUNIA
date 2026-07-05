@@ -54,6 +54,7 @@ type model struct {
 	// dashboard
 	orgName         string
 	accountCount    int
+	isOrgMode       bool
 	complianceScore int
 	selected        int
 	menuItems       []string
@@ -116,6 +117,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.findings = msg.findings
 		m.orgName = msg.org.Name
 		m.accountCount = msg.org.AccountCount
+		m.isOrgMode = msg.org.IsOrgMode
 		m.complianceScore = nist.ComplianceScore(m.findings)
 		m.findingsTable = buildTable(m.findings, m.familyFilter, m.impactFilter)
 		return m, nil

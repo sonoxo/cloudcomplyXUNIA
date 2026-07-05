@@ -68,4 +68,9 @@ type Finding struct {
 type OrgSummary struct {
 	Name         string `json:"name"`
 	AccountCount int    `json:"account_count"`
+	// IsOrgMode is false when the credentials in use aren't part of an AWS
+	// Organization at all (AWSOrganizationsNotInUseException) — cloudcomply
+	// falls back to scoring the single account rather than failing outright,
+	// since org-wide access is often gated behind separate approval.
+	IsOrgMode bool `json:"is_org_mode"`
 }
