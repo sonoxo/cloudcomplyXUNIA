@@ -73,6 +73,14 @@ health() {
   fi
 }
 
+nodes_json() {
+  if [[ -n "$TOKEN" ]]; then
+    curl -fsS -H "Authorization: Bearer $TOKEN" "$CONTROL_PLANE/api/v1/nodes"
+  else
+    curl -fsS "$CONTROL_PLANE/api/v1/nodes"
+  fi
+}
+
 # Start the local control plane when port 8080 is not already serving NXYZ.
 if ! health; then
   if pid_alive "$CONTROL_PID"; then
@@ -137,12 +145,12 @@ nohup env \
   "$BIN_DIR/nxyz-agent" >"$AGENT_LOG" 2>&1 &
 echo $! > "$AGENT_PID"
 
-# Wait for the agent to register. No jq dependency required.
-AUTH=()
-if [[ -n "$TOKEN" ]]; then AUTH=(-H "Authorization: Bearer $TOKEN"); fi
+# Wait for the agent to register. Avoid empty-array expansion here because the
+# Bash 3.2 version shipped with macOS can raise an unbound-variable error under
+# `set -u` when expanding an empty array.
 REGISTERED=0
 for ((i=0; i<60; i++)); do
-  if curl -fsS "${AUTH[@]}" "$CONTROL_PLANE/api/v1/nodes" 2>/dev/null | grep -q "\"$NODE_ID\""; then
+  if nodes_json 2>/dev/null | grep -q "\"$NODE_ID\""; then
     REGISTERED=1
     break
   fi
@@ -160,6 +168,8 @@ echo "✅ NXYZ Cloud is online"
 echo "   Dashboard: $CONTROL_PLANE/"
 echo "   Health:    $CONTROL_PLANE/healthz"
 echo "   Node:      $NODE_NAME ($NODE_ID)"
+echo "   CPU:       ${NODE_CPU} millicores"
+echo "   Memory:    ${NODE_MEMORY} MB"
 echo "   Runtime:   rootless Podman"
 echo "   Logs:      $CONTROL_LOG"
 echo "              $AGENT_LOG"
