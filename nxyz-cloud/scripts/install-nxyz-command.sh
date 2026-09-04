@@ -63,11 +63,8 @@ case "\$cmd" in
   update)
     git pull --ff-only
     ;;
-  logs)
-    echo "--- control plane ---"
-    tail -n 40 .nxyz/controlplane.log 2>/dev/null || true
-    echo "--- agent ---"
-    tail -n 40 .nxyz/agent.log 2>/dev/null || true
+  logs|tools|storage|deploy|db|database|monitor|backup|secrets|secret|registry|git|ai|agents|agent|dns|terminal|term|catalog|apps|proxy|mesh)
+    bash "\$NXYZ_DIR/scripts/nxyz-tools.sh" "\$@"
     ;;
   path)
     printf '%s\n' "\$NXYZ_DIR"
@@ -80,15 +77,34 @@ case "\$cmd" in
     cat <<'HELP'
 NXYZ Cloud CLI
 
-  nxyz             Start/update NXYZ Cloud and open the dashboard
-  nxyz status      Show cloud health and nodes
-  nxyz dashboard   Open the dashboard
-  nxyz restart     Restart local NXYZ services
-  nxyz stop        Stop local NXYZ services
-  nxyz update      Pull the latest NXYZ code
-  nxyz logs        Show recent control-plane and agent logs
-  nxyz path        Print the NXYZ Cloud directory
-  nxyz shell       Enter a shell inside the NXYZ Cloud directory
+Core
+  nxyz                Start/update NXYZ Cloud
+  nxyz status         Show cloud health and nodes
+  nxyz dashboard      Open the dashboard
+  nxyz restart        Restart local NXYZ services
+  nxyz stop           Stop local NXYZ services
+  nxyz update         Pull latest code
+  nxyz logs [ID]      Platform logs or workload logs
+  nxyz path           Print NXYZ directory
+  nxyz shell          Enter an NXYZ shell
+
+Free Tool Plane
+  nxyz tools          Show installed NXYZ tools
+  nxyz storage ...    Object/file buckets
+  nxyz deploy ...     Deploy OCI images or Git repos
+  nxyz db ...         PostgreSQL databases
+  nxyz monitor        CPU/RAM/container metrics
+  nxyz backup ...     Backup and restore
+  nxyz secrets ...    Encrypted secrets
+  nxyz registry ...   Private OCI registry
+  nxyz git ...        Private Git repositories
+  nxyz ai ...         llama.cpp local AI API
+  nxyz agents ...     Agent workload launcher
+  nxyz dns ...        Service discovery records
+  nxyz terminal ID    Shell into a workload
+  nxyz catalog ...    App templates
+  nxyz proxy ...      Named route registry
+  nxyz mesh ...       Multi-node join/token flow
 HELP
     ;;
   *)
