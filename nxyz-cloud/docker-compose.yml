@@ -1,0 +1,58 @@
+services:
+  controlplane:
+    build:
+      context: .
+      target: controlplane
+    environment:
+      NXYZ_LISTEN: ":8080"
+      NXYZ_STATE: "/data/state.json"
+    ports:
+      - "8080:8080"
+    volumes:
+      - nxyz-state:/data
+    networks: [nxyz-mesh]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  node-a:
+    build:
+      context: .
+      target: agent
+    environment:
+      NXYZ_CONTROL_PLANE: "http://controlplane:8080"
+      NXYZ_NODE_ID: "node-a"
+      NXYZ_NODE_NAME: "Virginia Edge A"
+      NXYZ_NODE_CPU: "4000"
+      NXYZ_NODE_MEMORY_MB: "4096"
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    networks: [nxyz-mesh]
+    restart: unless-stopped
+
+  node-b:
+    build:
+      context: .
+      target: agent
+    environment:
+      NXYZ_CONTROL_PLANE: "http://controlplane:8080"
+      NXYZ_NODE_ID: "node-b"
+      NXYZ_NODE_NAME: "Virginia Edge B"
+      NXYZ_NODE_CPU: "4000"
+      NXYZ_NODE_MEMORY_MB: "4096"
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    networks: [nxyz-mesh]
+    restart: unless-stopped
+
+networks:
+  nxyz-mesh:
+    driver: bridge
+
+volumes:
+  nxyz-state:
