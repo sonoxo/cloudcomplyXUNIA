@@ -134,8 +134,11 @@ func ensureRunning(runtime runtimeConfig, nodeID string, w cloud.Workload) error
 	}
 
 	cpus := fmt.Sprintf("%.3f", float64(w.CPU)/1000.0)
-	args := []string{
-		"run", "-d", "--replace", "--pull=missing",
+	args := []string{"run", "-d", "--replace", "--pull=missing"}
+	if registry == "localhost" || strings.HasPrefix(registry, "localhost:") {
+		args = append(args, "--tls-verify=false")
+	}
+	args = append(args,
 		"--name", name,
 		"--cpus", cpus,
 		"--memory", fmt.Sprintf("%dm", w.Memory),
@@ -143,10 +146,10 @@ func ensureRunning(runtime runtimeConfig, nodeID string, w cloud.Workload) error
 		"--security-opt", "no-new-privileges",
 		"--network", "private",
 		"--label", "nxyz.managed=true",
-		"--label", "nxyz.workload-id=" + w.ID,
-		"--label", "nxyz.node-id=" + nodeID,
+		"--label", "nxyz.workload-id="+w.ID,
+		"--label", "nxyz.node-id="+nodeID,
 		image,
-	}
+	)
 	cmd := exec.Command(runtime.Binary, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -233,7 +236,7 @@ func doJSON(client *http.Client, method, url, token string, body any, dst any) e
 
 func discoverRuntime() (runtimeConfig, bool) {
 	allowed := map[string]struct{}{}
-	for _, item := range strings.Split(env("NXYZ_ALLOWED_REGISTRIES", "docker.io,ghcr.io,quay.io"), ",") {
+	for _, item := range strings.Split(env("NXYZ_ALLOWED_REGISTRIES", "docker.io,ghcr.io,quay.io,localhost:5000"), ",") {
 		if item = strings.TrimSpace(item); item != "" {
 			allowed[item] = struct{}{}
 		}
