@@ -11,7 +11,7 @@ stop_pid() {
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       echo "Stopping $name (pid $pid)..."
       kill "$pid" 2>/dev/null || true
-      for _ in $(seq 1 20); do
+      for ((i=0; i<20; i++)); do
         kill -0 "$pid" 2>/dev/null || break
         sleep 0.1
       done
