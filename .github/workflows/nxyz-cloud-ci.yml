@@ -23,8 +23,22 @@ jobs:
         with:
           go-version: '1.23.x'
           cache-dependency-path: nxyz-cloud/go.mod
-      - name: Validate launcher shell syntax
-        run: bash -n scripts/start-local.sh scripts/stop-local.sh scripts/run-host-agent.sh scripts/install-nxyz-command.sh scripts/smoke.sh
+      - name: Validate shell syntax
+        run: bash -n scripts/start-local.sh scripts/stop-local.sh scripts/run-host-agent.sh scripts/install-nxyz-command.sh scripts/nxyz-tools.sh scripts/smoke.sh
+      - name: Smoke test offline tool flows
+        run: |
+          export NXYZ_LOCAL_STATE_DIR="$RUNNER_TEMP/nxyz"
+          bash scripts/nxyz-tools.sh tools | grep -q 'storage'
+          bash scripts/nxyz-tools.sh storage create ci
+          printf 'nxyz-ci\n' > "$RUNNER_TEMP/object.txt"
+          bash scripts/nxyz-tools.sh storage put ci "$RUNNER_TEMP/object.txt" object.txt
+          bash scripts/nxyz-tools.sh storage list ci | grep -q 'object.txt'
+          bash scripts/nxyz-tools.sh secrets set ci-token test-value
+          test "$(bash scripts/nxyz-tools.sh secrets get ci-token)" = 'test-value'
+          bash scripts/nxyz-tools.sh git create ci
+          bash scripts/nxyz-tools.sh git list | grep -q '^ci$'
+          bash scripts/nxyz-tools.sh dns add api 127.0.0.1:8080
+          test "$(bash scripts/nxyz-tools.sh dns resolve api)" = '127.0.0.1:8080'
       - name: Test
         run: go test ./...
       - name: Vet
