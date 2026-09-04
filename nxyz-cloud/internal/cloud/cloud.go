@@ -15,6 +15,7 @@ import (
 var (
 	ErrNoCapacity = errors.New("no healthy node has enough capacity")
 	ErrNotFound   = errors.New("resource not found")
+	ErrForbidden  = errors.New("node is not authorized for this workload")
 )
 
 type Node struct {
@@ -30,14 +31,16 @@ type Node struct {
 }
 
 type Workload struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Image     string    `json:"image"`
-	CPU       int       `json:"cpu_millicores"`
-	Memory    int       `json:"memory_mb"`
-	NodeID    string    `json:"node_id"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Image          string    `json:"image"`
+	CPU            int       `json:"cpu_millicores"`
+	Memory         int       `json:"memory_mb"`
+	NodeID         string    `json:"node_id"`
+	Status         string    `json:"status"`
+	RuntimeMessage string    `json:"runtime_message,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type CreateWorkloadRequest struct {
@@ -45,6 +48,12 @@ type CreateWorkloadRequest struct {
 	Image  string `json:"image"`
 	CPU    int    `json:"cpu_millicores"`
 	Memory int    `json:"memory_mb"`
+}
+
+type UpdateWorkloadStatusRequest struct {
+	NodeID  string `json:"node_id"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
 }
 
 type RegisterNodeRequest struct {
@@ -191,6 +200,22 @@ func (c *ControlPlane) ListWorkloads() []Workload {
 	return out
 }
 
+func (c *ControlPlane) ListNodeWorkloads(nodeID string) ([]Workload, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if _, ok := c.nodes[nodeID]; !ok {
+		return nil, ErrNotFound
+	}
+	out := make([]Workload, 0)
+	for _, w := range c.workloads {
+		if w.NodeID == nodeID {
+			out = append(out, *w)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
 func (c *ControlPlane) CreateWorkload(req CreateWorkloadRequest) (*Workload, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Image = strings.TrimSpace(req.Image)
@@ -208,10 +233,11 @@ func (c *ControlPlane) CreateWorkload(req CreateWorkloadRequest) (*Workload, err
 	if node == nil {
 		return nil, ErrNoCapacity
 	}
-	id := fmt.Sprintf("w-%d", c.now().UnixNano())
+	now := c.now()
+	id := fmt.Sprintf("w-%d", now.UnixNano())
 	w := &Workload{
 		ID: id, Name: req.Name, Image: req.Image, CPU: req.CPU, Memory: req.Memory,
-		NodeID: node.ID, Status: "scheduled", CreatedAt: c.now(),
+		NodeID: node.ID, Status: "scheduled", CreatedAt: now, UpdatedAt: now,
 	}
 	c.workloads[id] = w
 	node.UsedCPU += req.CPU
@@ -220,6 +246,36 @@ func (c *ControlPlane) CreateWorkload(req CreateWorkloadRequest) (*Workload, err
 		delete(c.workloads, id)
 		node.UsedCPU -= req.CPU
 		node.UsedMemory -= req.Memory
+		return nil, err
+	}
+	cp := *w
+	return &cp, nil
+}
+
+func (c *ControlPlane) UpdateWorkloadStatus(id string, req UpdateWorkloadStatusRequest) (*Workload, error) {
+	req.NodeID = strings.TrimSpace(req.NodeID)
+	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	if req.NodeID == "" {
+		return nil, errors.New("node_id is required")
+	}
+	if !validWorkloadStatus(req.Status) {
+		return nil, errors.New("status must be scheduled, running, succeeded, or failed")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	w, ok := c.workloads[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if w.NodeID != req.NodeID {
+		return nil, ErrForbidden
+	}
+	w.Status = req.Status
+	w.RuntimeMessage = strings.TrimSpace(req.Message)
+	w.UpdatedAt = c.now()
+	c.recalculateNodeUsageLocked(w.NodeID)
+	if err := c.persistLocked(); err != nil {
 		return nil, err
 	}
 	cp := *w
@@ -241,7 +297,7 @@ func (c *ControlPlane) DeleteWorkload(id string) error {
 func (c *ControlPlane) Summary() Summary {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	s := Summary{Name: "NXYZ Cloud", Version: "0.1.0", UptimeSeconds: int64(c.now().Sub(c.startedAt).Seconds()), CompliancePlane: "cloudcomplyXUNIA bridge-ready"}
+	s := Summary{Name: "NXYZ Cloud", Version: "0.2.0", UptimeSeconds: int64(c.now().Sub(c.startedAt).Seconds()), CompliancePlane: "cloudcomplyXUNIA bridge-ready"}
 	s.Nodes = len(c.nodes)
 	s.Workloads = len(c.workloads)
 	for _, n := range c.nodes {
@@ -281,11 +337,24 @@ func (c *ControlPlane) recalculateNodeUsageLocked(nodeID string) {
 	}
 	n.UsedCPU, n.UsedMemory = 0, 0
 	for _, w := range c.workloads {
-		if w.NodeID == nodeID {
+		if w.NodeID == nodeID && workloadConsumesCapacity(w.Status) {
 			n.UsedCPU += w.CPU
 			n.UsedMemory += w.Memory
 		}
 	}
+}
+
+func validWorkloadStatus(status string) bool {
+	switch status {
+	case "scheduled", "running", "succeeded", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func workloadConsumesCapacity(status string) bool {
+	return status == "scheduled" || status == "running"
 }
 
 func (c *ControlPlane) load() error {
