@@ -1,4 +1,4 @@
-.PHONY: test build run up down smoke local-up local-down host-agent
+.PHONY: test build run up down smoke local-up local-down host-agent install-cli
 
 test:
 	go test ./...
@@ -27,6 +27,11 @@ local-down:
 
 host-agent:
 	bash ./scripts/run-host-agent.sh
+
+# Install a real `nxyz` executable into a normal PATH directory. This avoids
+# shell-function/alias conflicts in ~/.zshrc.
+install-cli:
+	bash ./scripts/install-nxyz-command.sh
 
 smoke:
 	sh ./scripts/smoke.sh
