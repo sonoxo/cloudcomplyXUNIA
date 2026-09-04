@@ -17,4 +17,4 @@ down:
 	docker compose down
 
 smoke:
-	./scripts/smoke.sh
+	sh ./scripts/smoke.sh
