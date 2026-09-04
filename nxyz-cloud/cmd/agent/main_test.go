@@ -4,10 +4,11 @@ import "testing"
 
 func TestNormalizeImage(t *testing.T) {
 	cases := map[string]string{
-		"nginx:alpine":            "docker.io/library/nginx:alpine",
-		"library/nginx:alpine":    "docker.io/library/nginx:alpine",
-		"ghcr.io/owner/app:v1":    "ghcr.io/owner/app:v1",
-		"quay.io/org/service:v2":  "quay.io/org/service:v2",
+		"nginx:alpine":                   "docker.io/library/nginx:alpine",
+		"library/nginx:alpine":           "docker.io/library/nginx:alpine",
+		"ghcr.io/owner/app:v1":           "ghcr.io/owner/app:v1",
+		"quay.io/org/service:v2":         "quay.io/org/service:v2",
+		"localhost:5000/nxyz/app:latest": "localhost:5000/nxyz/app:latest",
 	}
 	for in, want := range cases {
 		got, err := normalizeImage(in)

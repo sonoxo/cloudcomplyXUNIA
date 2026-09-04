@@ -11,9 +11,11 @@ AGENT_LOG="$STATE_DIR/agent.log"
 CONTROL_PID="$STATE_DIR/controlplane.pid"
 AGENT_PID="$STATE_DIR/agent.pid"
 CONTROL_PLANE="${NXYZ_CONTROL_PLANE:-http://127.0.0.1:8080}"
+LISTEN="${NXYZ_LISTEN:-127.0.0.1:8080}"
 TOKEN="${NXYZ_CLUSTER_TOKEN:-}"
 
 mkdir -p "$BIN_DIR"
+if [[ -z "$TOKEN" && -f "$STATE_DIR/cluster.token" ]]; then TOKEN="$(cat "$STATE_DIR/cluster.token")"; fi
 
 need() {
   local cmd="$1"
@@ -31,8 +33,6 @@ need go
 need curl
 need podman
 
-# macOS runs Linux containers inside Podman's free local VM. Prefer starting an
-# existing machine; initialize one only when no machine exists.
 if [[ "$(uname -s)" == "Darwin" ]]; then
   if ! podman info >/dev/null 2>&1; then
     echo "Starting Podman machine..."
@@ -52,8 +52,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   fi
 fi
 
-# Always build the exact checked-out code before launching. This avoids stale
-# go-run children and makes PID management deterministic.
 echo "Building NXYZ Cloud binaries..."
 go build -o "$BIN_DIR/nxyz-controlplane" ./cmd/controlplane
 go build -o "$BIN_DIR/nxyz-agent" ./cmd/agent
@@ -81,16 +79,15 @@ nodes_json() {
   fi
 }
 
-# Start the local control plane when port 8080 is not already serving NXYZ.
 if ! health; then
   if pid_alive "$CONTROL_PID"; then
     kill "$(cat "$CONTROL_PID")" 2>/dev/null || true
     sleep 0.5
   fi
   rm -f "$CONTROL_PID"
-  echo "Starting NXYZ control plane on 127.0.0.1:8080..."
+  echo "Starting NXYZ control plane on $LISTEN..."
   nohup env \
-    NXYZ_LISTEN="127.0.0.1:8080" \
+    NXYZ_LISTEN="$LISTEN" \
     NXYZ_STATE="$STATE_DIR/state.json" \
     NXYZ_CLUSTER_TOKEN="$TOKEN" \
     "$BIN_DIR/nxyz-controlplane" >"$CONTROL_LOG" 2>&1 &
@@ -107,7 +104,6 @@ if ! health; then
   fi
 fi
 
-# Derive sensible local capacity unless explicitly overridden.
 if [[ "$(uname -s)" == "Darwin" ]]; then
   CORES="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
   MEM_BYTES="$(sysctl -n hw.memsize 2>/dev/null || echo 8589934592)"
@@ -145,9 +141,6 @@ nohup env \
   "$BIN_DIR/nxyz-agent" >"$AGENT_LOG" 2>&1 &
 echo $! > "$AGENT_PID"
 
-# Wait for the agent to register. Avoid empty-array expansion here because the
-# Bash 3.2 version shipped with macOS can raise an unbound-variable error under
-# `set -u` when expanding an empty array.
 REGISTERED=0
 for ((i=0; i<60; i++)); do
   if nodes_json 2>/dev/null | grep -q "\"$NODE_ID\""; then
@@ -167,6 +160,7 @@ echo
 echo "✅ NXYZ Cloud is online"
 echo "   Dashboard: $CONTROL_PLANE/"
 echo "   Health:    $CONTROL_PLANE/healthz"
+echo "   Listen:    $LISTEN"
 echo "   Node:      $NODE_NAME ($NODE_ID)"
 echo "   CPU:       ${NODE_CPU} millicores"
 echo "   Memory:    ${NODE_MEMORY} MB"
