@@ -23,7 +23,7 @@ if [[ "$(uname -s)" == "Darwin" && "$runtime" == "podman" ]]; then
       echo "No usable Podman machine found; initializing one..."
       podman machine init --now >/dev/null
     fi
-    for _ in $(seq 1 40); do
+    for ((i=0; i<40; i++)); do
       podman info >/dev/null 2>&1 && break
       sleep 0.5
     done
@@ -59,7 +59,7 @@ if [[ "$cp" == http://127.0.0.1:8080 || "$cp" == http://localhost:8080 ]]; then
       NXYZ_CLUSTER_TOKEN="$token" \
       "$state_dir/bin/nxyz-controlplane" >"$state_dir/controlplane.log" 2>&1 &
     echo $! > "$state_dir/controlplane.pid"
-    for _ in $(seq 1 60); do
+    for ((i=0; i<60; i++)); do
       health && break
       sleep 0.25
     done
