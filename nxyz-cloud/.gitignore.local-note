@@ -1,0 +1,1 @@
+.nxyz/ is local runtime state and should remain untracked.
