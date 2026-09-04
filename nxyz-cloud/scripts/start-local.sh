@@ -40,7 +40,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
       echo "No usable Podman machine found; initializing one..."
       podman machine init --now >/dev/null
     fi
-    for _ in $(seq 1 40); do
+    for ((i=0; i<40; i++)); do
       podman info >/dev/null 2>&1 && break
       sleep 0.5
     done
@@ -88,7 +88,7 @@ if ! health; then
     "$BIN_DIR/nxyz-controlplane" >"$CONTROL_LOG" 2>&1 &
   echo $! > "$CONTROL_PID"
 
-  for _ in $(seq 1 60); do
+  for ((i=0; i<60; i++)); do
     health && break
     sleep 0.25
   done
@@ -139,9 +139,9 @@ echo $! > "$AGENT_PID"
 
 # Wait for the agent to register. No jq dependency required.
 AUTH=()
-[[ -n "$TOKEN" ]] && AUTH=(-H "Authorization: Bearer $TOKEN")
+if [[ -n "$TOKEN" ]]; then AUTH=(-H "Authorization: Bearer $TOKEN"); fi
 REGISTERED=0
-for _ in $(seq 1 60); do
+for ((i=0; i<60; i++)); do
   if curl -fsS "${AUTH[@]}" "$CONTROL_PLANE/api/v1/nodes" 2>/dev/null | grep -q "\"$NODE_ID\""; then
     REGISTERED=1
     break
@@ -164,7 +164,6 @@ echo "   Runtime:   rootless Podman"
 echo "   Logs:      $CONTROL_LOG"
 echo "              $AGENT_LOG"
 echo
-echo "Open the dashboard now:"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   open "$CONTROL_PLANE/" >/dev/null 2>&1 || true
 fi
