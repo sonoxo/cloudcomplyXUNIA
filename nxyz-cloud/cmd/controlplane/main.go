@@ -35,6 +35,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /api/v1/system", a.system)
+	mux.HandleFunc("GET /api/v1/summary", a.system)
 	mux.HandleFunc("GET /api/v1/nodes", a.nodes)
 	mux.HandleFunc("POST /api/v1/nodes/register", a.protected(a.registerNode))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/heartbeat", a.protected(a.heartbeat))
