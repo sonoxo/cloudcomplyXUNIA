@@ -1,3 +1,0 @@
-start-local.sh  - build/start local control plane + rootless Podman agent
-stop-local.sh   - stop local NXYZ processes
-run-host-agent.sh - start an executing host agent; self-starts localhost control plane when needed
