@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,10 @@ import (
 //go:embed index.html
 var dashboard embed.FS
 
-type api struct{ cp *cloud.ControlPlane }
+type api struct {
+	cp    *cloud.ControlPlane
+	token string
+}
 
 func main() {
 	addr := env("NXYZ_LISTEN", ":8080")
@@ -27,16 +31,18 @@ func main() {
 		log.Fatalf("initialize NXYZ Cloud: %v", err)
 	}
 
-	a := &api{cp: cp}
+	a := &api{cp: cp, token: strings.TrimSpace(os.Getenv("NXYZ_CLUSTER_TOKEN"))}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /api/v1/system", a.system)
 	mux.HandleFunc("GET /api/v1/nodes", a.nodes)
-	mux.HandleFunc("POST /api/v1/nodes/register", a.registerNode)
-	mux.HandleFunc("POST /api/v1/nodes/{id}/heartbeat", a.heartbeat)
+	mux.HandleFunc("POST /api/v1/nodes/register", a.protected(a.registerNode))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/heartbeat", a.protected(a.heartbeat))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/workloads", a.protected(a.nodeWorkloads))
 	mux.HandleFunc("GET /api/v1/workloads", a.workloads)
-	mux.HandleFunc("POST /api/v1/workloads", a.createWorkload)
-	mux.HandleFunc("DELETE /api/v1/workloads/{id}", a.deleteWorkload)
+	mux.HandleFunc("POST /api/v1/workloads", a.protected(a.createWorkload))
+	mux.HandleFunc("POST /api/v1/workloads/{id}/status", a.protected(a.updateWorkloadStatus))
+	mux.HandleFunc("DELETE /api/v1/workloads/{id}", a.protected(a.deleteWorkload))
 	mux.HandleFunc("GET /metrics", a.metrics)
 	mux.HandleFunc("GET /", a.dashboard)
 
@@ -50,6 +56,9 @@ func main() {
 
 	srv := &http.Server{Addr: addr, Handler: requestLog(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("☁️  NXYZ Cloud control plane listening on %s", addr)
+	if a.token == "" {
+		log.Printf("⚠️  NXYZ_CLUSTER_TOKEN is unset; mutation endpoints are unauthenticated. Keep the API bound to localhost or set a token.")
+	}
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -91,6 +100,19 @@ func (a *api) heartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, n)
 }
 
+func (a *api) nodeWorkloads(w http.ResponseWriter, r *http.Request) {
+	items, err := a.cp.ListNodeWorkloads(r.PathValue("id"))
+	if errors.Is(err, cloud.ErrNotFound) {
+		writeError(w, 404, err)
+		return
+	}
+	if err != nil {
+		writeError(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, items)
+}
+
 func (a *api) createWorkload(w http.ResponseWriter, r *http.Request) {
 	var req cloud.CreateWorkloadRequest
 	if err := decodeJSON(r, &req); err != nil {
@@ -107,6 +129,25 @@ func (a *api) createWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, item)
+}
+
+func (a *api) updateWorkloadStatus(w http.ResponseWriter, r *http.Request) {
+	var req cloud.UpdateWorkloadStatusRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, 400, err)
+		return
+	}
+	item, err := a.cp.UpdateWorkloadStatus(r.PathValue("id"), req)
+	switch {
+	case errors.Is(err, cloud.ErrNotFound):
+		writeError(w, 404, err)
+	case errors.Is(err, cloud.ErrForbidden):
+		writeError(w, 403, err)
+	case err != nil:
+		writeError(w, 400, err)
+	default:
+		writeJSON(w, 200, item)
+	}
 }
 
 func (a *api) deleteWorkload(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +168,7 @@ func (a *api) metrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	fmt.Fprintf(w, "# HELP nxyz_nodes_total Number of registered nodes.\n# TYPE nxyz_nodes_total gauge\nnxyz_nodes_total %d\n", s.Nodes)
 	fmt.Fprintf(w, "# HELP nxyz_nodes_healthy Number of healthy nodes.\n# TYPE nxyz_nodes_healthy gauge\nnxyz_nodes_healthy %d\n", s.HealthyNodes)
-	fmt.Fprintf(w, "# HELP nxyz_workloads_total Number of scheduled workloads.\n# TYPE nxyz_workloads_total gauge\nnxyz_workloads_total %d\n", s.Workloads)
+	fmt.Fprintf(w, "# HELP nxyz_workloads_total Number of workloads tracked by the control plane.\n# TYPE nxyz_workloads_total gauge\nnxyz_workloads_total %d\n", s.Workloads)
 	fmt.Fprintf(w, "# HELP nxyz_cpu_allocated_millicores Allocated CPU.\n# TYPE nxyz_cpu_allocated_millicores gauge\nnxyz_cpu_allocated_millicores %d\n", s.AllocatedCPU)
 	fmt.Fprintf(w, "# HELP nxyz_memory_allocated_mb Allocated memory.\n# TYPE nxyz_memory_allocated_mb gauge\nnxyz_memory_allocated_mb %d\n", s.AllocatedMemory)
 }
@@ -144,6 +185,22 @@ func (a *api) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(b)
+}
+
+func (a *api) protected(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if a.token == "" {
+			next(w, r)
+			return
+		}
+		const prefix = "Bearer "
+		header := r.Header.Get("Authorization")
+		if !strings.HasPrefix(header, prefix) || subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(header, prefix)), []byte(a.token)) != 1 {
+			writeError(w, http.StatusUnauthorized, errors.New("valid NXYZ cluster token required"))
+			return
+		}
+		next(w, r)
+	}
 }
 
 func decodeJSON(r *http.Request, dst any) error {
