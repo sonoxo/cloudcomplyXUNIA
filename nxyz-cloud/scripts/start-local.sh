@@ -10,11 +10,13 @@ CONTROL_LOG="$STATE_DIR/controlplane.log"
 AGENT_LOG="$STATE_DIR/agent.log"
 CONTROL_PID="$STATE_DIR/controlplane.pid"
 AGENT_PID="$STATE_DIR/agent.pid"
-CONTROL_PLANE="${NXYZ_CONTROL_PLANE:-http://127.0.0.1:8080}"
-LISTEN="${NXYZ_LISTEN:-127.0.0.1:8080}"
+CONTROL_PLANE="${NXYZ_CONTROL_PLANE:-}"
 TOKEN="${NXYZ_CLUSTER_TOKEN:-}"
 
 mkdir -p "$BIN_DIR"
+if [[ -z "$CONTROL_PLANE" && -f "$STATE_DIR/remote-control-plane" ]]; then CONTROL_PLANE="$(cat "$STATE_DIR/remote-control-plane")"; fi
+CONTROL_PLANE="${CONTROL_PLANE:-http://127.0.0.1:8080}"
+CONTROL_PLANE="${CONTROL_PLANE%/}"
 if [[ -z "$TOKEN" && -f "$STATE_DIR/cluster.token" ]]; then TOKEN="$(cat "$STATE_DIR/cluster.token")"; fi
 
 need() {
@@ -32,6 +34,44 @@ need() {
 need go
 need curl
 need podman
+
+# Mesh mode is opt-in and persisted. Local-only is the secure default.
+detect_lan_ip() {
+  local ip=""
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+  else
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  fi
+  [[ -n "$ip" ]] || ip="127.0.0.1"
+  printf '%s\n' "$ip"
+}
+
+MESH_ENABLED=0
+if [[ -f "$STATE_DIR/mesh.enabled" ]]; then MESH_ENABLED=1; fi
+LAN_IP="$(detect_lan_ip)"
+if [[ "$MESH_ENABLED" == "1" ]]; then
+  if [[ -z "$TOKEN" ]]; then
+    need openssl
+    umask 077
+    openssl rand -hex 32 >"$STATE_DIR/cluster.token"
+    TOKEN="$(cat "$STATE_DIR/cluster.token")"
+  fi
+  LISTEN="${NXYZ_LISTEN:-0.0.0.0:8080}"
+  NODE_ADDRESS="${NXYZ_NODE_ADDRESS:-$LAN_IP}"
+  PUBLISH_BIND="${NXYZ_PUBLISH_BIND:-0.0.0.0}"
+  PUBLISH_HOST="${NXYZ_PUBLISH_HOST:-$NODE_ADDRESS}"
+else
+  LISTEN="${NXYZ_LISTEN:-127.0.0.1:8080}"
+  NODE_ADDRESS="${NXYZ_NODE_ADDRESS:-127.0.0.1}"
+  PUBLISH_BIND="${NXYZ_PUBLISH_BIND:-127.0.0.1}"
+  PUBLISH_HOST="${NXYZ_PUBLISH_HOST:-127.0.0.1}"
+fi
+
+LOCAL_CONTROLLER=0
+case "$CONTROL_PLANE" in
+  http://127.0.0.1:8080|http://localhost:8080) LOCAL_CONTROLLER=1 ;;
+esac
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   if ! podman info >/dev/null 2>&1; then
@@ -79,27 +119,48 @@ nodes_json() {
   fi
 }
 
-if ! health; then
-  if pid_alive "$CONTROL_PID"; then
+CURRENT_LISTEN_FILE="$STATE_DIR/controlplane.listen"
+if [[ "$LOCAL_CONTROLLER" == "1" ]]; then
+  CURRENT_LISTEN="$(cat "$CURRENT_LISTEN_FILE" 2>/dev/null || true)"
+  if [[ -n "$CURRENT_LISTEN" && "$CURRENT_LISTEN" != "$LISTEN" ]] && pid_alive "$CONTROL_PID"; then
     kill "$(cat "$CONTROL_PID")" 2>/dev/null || true
     sleep 0.5
   fi
-  rm -f "$CONTROL_PID"
-  echo "Starting NXYZ control plane on $LISTEN..."
-  nohup env \
-    NXYZ_LISTEN="$LISTEN" \
-    NXYZ_STATE="$STATE_DIR/state.json" \
-    NXYZ_CLUSTER_TOKEN="$TOKEN" \
-    "$BIN_DIR/nxyz-controlplane" >"$CONTROL_LOG" 2>&1 &
-  echo $! > "$CONTROL_PID"
 
-  for ((i=0; i<60; i++)); do
-    health && break
-    sleep 0.25
-  done
+  if ! health || ! pid_alive "$CONTROL_PID"; then
+    if pid_alive "$CONTROL_PID"; then
+      kill "$(cat "$CONTROL_PID")" 2>/dev/null || true
+      sleep 0.5
+    fi
+    rm -f "$CONTROL_PID"
+    echo "Starting NXYZ control plane on $LISTEN..."
+    nohup env \
+      NXYZ_LISTEN="$LISTEN" \
+      NXYZ_STATE="$STATE_DIR/state.json" \
+      NXYZ_CLUSTER_TOKEN="$TOKEN" \
+      "$BIN_DIR/nxyz-controlplane" >"$CONTROL_LOG" 2>&1 &
+    echo $! > "$CONTROL_PID"
+    printf '%s\n' "$LISTEN" >"$CURRENT_LISTEN_FILE"
+
+    for ((i=0; i<60; i++)); do
+      health && break
+      sleep 0.25
+    done
+    if ! health; then
+      echo "NXYZ control plane did not become healthy. Last log lines:" >&2
+      tail -n 40 "$CONTROL_LOG" >&2 || true
+      exit 1
+    fi
+  fi
+else
+  # A joined worker must use the selected controller, not silently create a
+  # competing controller on itself.
+  if pid_alive "$CONTROL_PID"; then
+    kill "$(cat "$CONTROL_PID")" 2>/dev/null || true
+    rm -f "$CONTROL_PID"
+  fi
   if ! health; then
-    echo "NXYZ control plane did not become healthy. Last log lines:" >&2
-    tail -n 40 "$CONTROL_LOG" >&2 || true
+    echo "Remote NXYZ controller is unavailable: $CONTROL_PLANE" >&2
     exit 1
   fi
 fi
@@ -116,11 +177,14 @@ CPU_DEFAULT=$((CORES * 1000 * 3 / 4))
 MEM_DEFAULT=$((MEM_MB * 3 / 4))
 (( CPU_DEFAULT < 1000 )) && CPU_DEFAULT=1000
 (( MEM_DEFAULT < 1024 )) && MEM_DEFAULT=1024
+DISK_DEFAULT="$(df -Pk "$ROOT" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')"
+[[ -n "$DISK_DEFAULT" ]] || DISK_DEFAULT=0
 
 NODE_ID="${NXYZ_NODE_ID:-$(hostname | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9-' '-')-exec}"
 NODE_NAME="${NXYZ_NODE_NAME:-Local Rootless Compute}"
 NODE_CPU="${NXYZ_NODE_CPU:-$CPU_DEFAULT}"
 NODE_MEMORY="${NXYZ_NODE_MEMORY_MB:-$MEM_DEFAULT}"
+NODE_DISK="${NXYZ_NODE_DISK_MB:-$DISK_DEFAULT}"
 
 if pid_alive "$AGENT_PID"; then
   kill "$(cat "$AGENT_PID")" 2>/dev/null || true
@@ -134,8 +198,12 @@ nohup env \
   NXYZ_CLUSTER_TOKEN="$TOKEN" \
   NXYZ_NODE_ID="$NODE_ID" \
   NXYZ_NODE_NAME="$NODE_NAME" \
+  NXYZ_NODE_ADDRESS="$NODE_ADDRESS" \
   NXYZ_NODE_CPU="$NODE_CPU" \
   NXYZ_NODE_MEMORY_MB="$NODE_MEMORY" \
+  NXYZ_NODE_DISK_MB="$NODE_DISK" \
+  NXYZ_PUBLISH_BIND="$PUBLISH_BIND" \
+  NXYZ_PUBLISH_HOST="$PUBLISH_HOST" \
   NXYZ_EXECUTION_ENABLED="true" \
   NXYZ_RUNTIME="podman" \
   "$BIN_DIR/nxyz-agent" >"$AGENT_LOG" 2>&1 &
@@ -157,17 +225,19 @@ if [[ "$REGISTERED" != "1" ]]; then
 fi
 
 echo
-echo "✅ NXYZ Cloud is online"
-echo "   Dashboard: $CONTROL_PLANE/"
-echo "   Health:    $CONTROL_PLANE/healthz"
-echo "   Listen:    $LISTEN"
-echo "   Node:      $NODE_NAME ($NODE_ID)"
-echo "   CPU:       ${NODE_CPU} millicores"
-echo "   Memory:    ${NODE_MEMORY} MB"
-echo "   Runtime:   rootless Podman"
-echo "   Logs:      $CONTROL_LOG"
-echo "              $AGENT_LOG"
+echo "✅ NXYZ Cloud v1 is online"
+echo "   Controller: $CONTROL_PLANE"
+if [[ "$LOCAL_CONTROLLER" == "1" ]]; then echo "   Listen:     $LISTEN"; else echo "   Role:       worker node"; fi
+echo "   Mesh:       $([[ "$MESH_ENABLED" == "1" ]] && echo enabled || echo local-only)"
+echo "   Node:       $NODE_NAME ($NODE_ID)"
+echo "   Address:    $NODE_ADDRESS"
+echo "   CPU:        ${NODE_CPU} millicores"
+echo "   Memory:     ${NODE_MEMORY} MB"
+echo "   Disk free:  ${NODE_DISK} MB advertised"
+echo "   Publishing: $PUBLISH_BIND -> $PUBLISH_HOST"
+echo "   Runtime:    rootless Podman"
+echo "   Agent log:  $AGENT_LOG"
 echo
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "$LOCAL_CONTROLLER" == "1" && "$(uname -s)" == "Darwin" ]]; then
   open "$CONTROL_PLANE/" >/dev/null 2>&1 || true
 fi

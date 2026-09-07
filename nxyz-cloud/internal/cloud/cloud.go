@@ -24,6 +24,7 @@ type Node struct {
 	Address        string    `json:"address,omitempty"`
 	CapacityCPU    int       `json:"capacity_cpu_millicores"`
 	CapacityMemory int       `json:"capacity_memory_mb"`
+	CapacityDisk   int       `json:"capacity_disk_mb,omitempty"`
 	UsedCPU        int       `json:"used_cpu_millicores"`
 	UsedMemory     int       `json:"used_memory_mb"`
 	Status         string    `json:"status"`
@@ -39,21 +40,33 @@ type Workload struct {
 	NodeID         string    `json:"node_id"`
 	Status         string    `json:"status"`
 	RuntimeMessage string    `json:"runtime_message,omitempty"`
+	ContainerPort  int       `json:"container_port,omitempty"`
+	Publish        bool      `json:"publish,omitempty"`
+	HostPort       int       `json:"host_port,omitempty"`
+	Endpoint       string    `json:"endpoint,omitempty"`
+	HealthPath     string    `json:"health_path,omitempty"`
+	Health         string    `json:"health,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type CreateWorkloadRequest struct {
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	CPU    int    `json:"cpu_millicores"`
-	Memory int    `json:"memory_mb"`
+	Name          string `json:"name"`
+	Image         string `json:"image"`
+	CPU           int    `json:"cpu_millicores"`
+	Memory        int    `json:"memory_mb"`
+	ContainerPort int    `json:"container_port,omitempty"`
+	Publish       bool   `json:"publish,omitempty"`
+	HealthPath    string `json:"health_path,omitempty"`
 }
 
 type UpdateWorkloadStatusRequest struct {
-	NodeID  string `json:"node_id"`
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
+	NodeID   string `json:"node_id"`
+	Status   string `json:"status"`
+	Message  string `json:"message,omitempty"`
+	HostPort int    `json:"host_port,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Health   string `json:"health,omitempty"`
 }
 
 type RegisterNodeRequest struct {
@@ -62,20 +75,24 @@ type RegisterNodeRequest struct {
 	Address string `json:"address,omitempty"`
 	CPU     int    `json:"capacity_cpu_millicores"`
 	Memory  int    `json:"capacity_memory_mb"`
+	Disk    int    `json:"capacity_disk_mb,omitempty"`
 }
 
 type Summary struct {
-	Name            string `json:"name"`
-	Version         string `json:"version"`
-	UptimeSeconds   int64  `json:"uptime_seconds"`
-	Nodes           int    `json:"nodes"`
-	HealthyNodes    int    `json:"healthy_nodes"`
-	Workloads       int    `json:"workloads"`
-	AllocatedCPU    int    `json:"allocated_cpu_millicores"`
-	TotalCPU        int    `json:"total_cpu_millicores"`
-	AllocatedMemory int    `json:"allocated_memory_mb"`
-	TotalMemory     int    `json:"total_memory_mb"`
-	CompliancePlane string `json:"compliance_plane"`
+	Name              string `json:"name"`
+	Version           string `json:"version"`
+	UptimeSeconds     int64  `json:"uptime_seconds"`
+	Nodes             int    `json:"nodes"`
+	HealthyNodes      int    `json:"healthy_nodes"`
+	Workloads         int    `json:"workloads"`
+	RunningWorkloads  int    `json:"running_workloads"`
+	PublishedServices int    `json:"published_services"`
+	AllocatedCPU      int    `json:"allocated_cpu_millicores"`
+	TotalCPU          int    `json:"total_cpu_millicores"`
+	AllocatedMemory   int    `json:"allocated_memory_mb"`
+	TotalMemory       int    `json:"total_memory_mb"`
+	TotalDisk         int    `json:"total_disk_mb"`
+	CompliancePlane   string `json:"compliance_plane"`
 }
 
 type persistedState struct {
@@ -115,11 +132,17 @@ func (c *ControlPlane) SetClock(now func() time.Time) {
 }
 
 func (c *ControlPlane) RegisterNode(req RegisterNodeRequest) (*Node, error) {
-	if strings.TrimSpace(req.ID) == "" || strings.TrimSpace(req.Name) == "" {
+	req.ID = strings.TrimSpace(req.ID)
+	req.Name = strings.TrimSpace(req.Name)
+	req.Address = strings.TrimSpace(req.Address)
+	if req.ID == "" || req.Name == "" {
 		return nil, errors.New("node id and name are required")
 	}
 	if req.CPU <= 0 || req.Memory <= 0 {
 		return nil, errors.New("node capacity must be greater than zero")
+	}
+	if req.Disk < 0 {
+		return nil, errors.New("node disk capacity cannot be negative")
 	}
 
 	c.mu.Lock()
@@ -135,6 +158,7 @@ func (c *ControlPlane) RegisterNode(req RegisterNodeRequest) (*Node, error) {
 	n.Address = req.Address
 	n.CapacityCPU = req.CPU
 	n.CapacityMemory = req.Memory
+	n.CapacityDisk = req.Disk
 	n.Status = "healthy"
 	n.LastSeen = now
 	c.recalculateNodeUsageLocked(req.ID)
@@ -192,12 +216,55 @@ func (c *ControlPlane) ListNodes() []Node {
 func (c *ControlPlane) ListWorkloads() []Workload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.listWorkloadsLocked(false)
+}
+
+func (c *ControlPlane) ListServices() []Workload {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.listWorkloadsLocked(true)
+}
+
+func (c *ControlPlane) listWorkloadsLocked(servicesOnly bool) []Workload {
 	out := make([]Workload, 0, len(c.workloads))
 	for _, w := range c.workloads {
+		if servicesOnly && !w.Publish {
+			continue
+		}
 		out = append(out, *w)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out
+}
+
+func (c *ControlPlane) GetWorkload(id string) (*Workload, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	w, ok := c.workloads[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *w
+	return &cp, nil
+}
+
+func (c *ControlPlane) FindService(name string) (*Workload, error) {
+	name = strings.TrimSpace(name)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var best *Workload
+	for _, w := range c.workloads {
+		if w.Publish && w.Name == name {
+			if best == nil || (w.Status == "running" && best.Status != "running") || w.CreatedAt.After(best.CreatedAt) {
+				best = w
+			}
+		}
+	}
+	if best == nil {
+		return nil, ErrNotFound
+	}
+	cp := *best
+	return &cp, nil
 }
 
 func (c *ControlPlane) ListNodeWorkloads(nodeID string) ([]Workload, error) {
@@ -219,11 +286,24 @@ func (c *ControlPlane) ListNodeWorkloads(nodeID string) ([]Workload, error) {
 func (c *ControlPlane) CreateWorkload(req CreateWorkloadRequest) (*Workload, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Image = strings.TrimSpace(req.Image)
+	req.HealthPath = strings.TrimSpace(req.HealthPath)
 	if req.Name == "" || req.Image == "" {
 		return nil, errors.New("workload name and image are required")
 	}
 	if req.CPU <= 0 || req.Memory <= 0 {
 		return nil, errors.New("cpu_millicores and memory_mb must be greater than zero")
+	}
+	if req.ContainerPort < 0 || req.ContainerPort > 65535 {
+		return nil, errors.New("container_port must be between 1 and 65535")
+	}
+	if req.ContainerPort > 0 {
+		req.Publish = true
+	}
+	if req.Publish && req.ContainerPort == 0 {
+		return nil, errors.New("published workload requires container_port")
+	}
+	if req.HealthPath != "" && !strings.HasPrefix(req.HealthPath, "/") {
+		return nil, errors.New("health_path must begin with /")
 	}
 
 	c.mu.Lock()
@@ -235,9 +315,15 @@ func (c *ControlPlane) CreateWorkload(req CreateWorkloadRequest) (*Workload, err
 	}
 	now := c.now()
 	id := fmt.Sprintf("w-%d", now.UnixNano())
+	health := ""
+	if req.Publish {
+		health = "starting"
+	}
 	w := &Workload{
 		ID: id, Name: req.Name, Image: req.Image, CPU: req.CPU, Memory: req.Memory,
-		NodeID: node.ID, Status: "scheduled", CreatedAt: now, UpdatedAt: now,
+		NodeID: node.ID, Status: "scheduled", ContainerPort: req.ContainerPort,
+		Publish: req.Publish, HealthPath: req.HealthPath, Health: health,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	c.workloads[id] = w
 	node.UsedCPU += req.CPU
@@ -255,11 +341,19 @@ func (c *ControlPlane) CreateWorkload(req CreateWorkloadRequest) (*Workload, err
 func (c *ControlPlane) UpdateWorkloadStatus(id string, req UpdateWorkloadStatusRequest) (*Workload, error) {
 	req.NodeID = strings.TrimSpace(req.NodeID)
 	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	req.Endpoint = strings.TrimSpace(req.Endpoint)
+	req.Health = strings.ToLower(strings.TrimSpace(req.Health))
 	if req.NodeID == "" {
 		return nil, errors.New("node_id is required")
 	}
 	if !validWorkloadStatus(req.Status) {
 		return nil, errors.New("status must be scheduled, running, succeeded, or failed")
+	}
+	if req.HostPort < 0 || req.HostPort > 65535 {
+		return nil, errors.New("host_port must be between 1 and 65535")
+	}
+	if req.Health != "" && !validHealth(req.Health) {
+		return nil, errors.New("health must be starting, healthy, unhealthy, or unknown")
 	}
 
 	c.mu.Lock()
@@ -273,6 +367,22 @@ func (c *ControlPlane) UpdateWorkloadStatus(id string, req UpdateWorkloadStatusR
 	}
 	w.Status = req.Status
 	w.RuntimeMessage = strings.TrimSpace(req.Message)
+	if req.HostPort > 0 {
+		w.HostPort = req.HostPort
+	}
+	if req.Endpoint != "" {
+		w.Endpoint = req.Endpoint
+	}
+	if req.Health != "" {
+		w.Health = req.Health
+	}
+	if req.Status == "succeeded" || req.Status == "failed" {
+		w.HostPort = 0
+		w.Endpoint = ""
+		if w.Publish && w.Health != "unhealthy" {
+			w.Health = "unknown"
+		}
+	}
 	w.UpdatedAt = c.now()
 	c.recalculateNodeUsageLocked(w.NodeID)
 	if err := c.persistLocked(); err != nil {
@@ -297,7 +407,7 @@ func (c *ControlPlane) DeleteWorkload(id string) error {
 func (c *ControlPlane) Summary() Summary {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	s := Summary{Name: "NXYZ Cloud", Version: "0.2.0", UptimeSeconds: int64(c.now().Sub(c.startedAt).Seconds()), CompliancePlane: "cloudcomplyXUNIA bridge-ready"}
+	s := Summary{Name: "NXYZ Cloud", Version: "1.0.0", UptimeSeconds: int64(c.now().Sub(c.startedAt).Seconds()), CompliancePlane: "cloudcomplyXUNIA bridge-ready"}
 	s.Nodes = len(c.nodes)
 	s.Workloads = len(c.workloads)
 	for _, n := range c.nodes {
@@ -308,6 +418,15 @@ func (c *ControlPlane) Summary() Summary {
 		s.TotalCPU += n.CapacityCPU
 		s.AllocatedMemory += n.UsedMemory
 		s.TotalMemory += n.CapacityMemory
+		s.TotalDisk += n.CapacityDisk
+	}
+	for _, w := range c.workloads {
+		if w.Status == "running" {
+			s.RunningWorkloads++
+		}
+		if w.Publish && w.Endpoint != "" && w.Status == "running" {
+			s.PublishedServices++
+		}
 	}
 	return s
 }
@@ -347,6 +466,15 @@ func (c *ControlPlane) recalculateNodeUsageLocked(nodeID string) {
 func validWorkloadStatus(status string) bool {
 	switch status {
 	case "scheduled", "running", "succeeded", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func validHealth(health string) bool {
+	switch health {
+	case "starting", "healthy", "unhealthy", "unknown":
 		return true
 	default:
 		return false

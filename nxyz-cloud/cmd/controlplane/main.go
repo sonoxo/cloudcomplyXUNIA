@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -42,8 +44,12 @@ func main() {
 	mux.HandleFunc("GET /api/v1/nodes/{id}/workloads", a.protected(a.nodeWorkloads))
 	mux.HandleFunc("GET /api/v1/workloads", a.workloads)
 	mux.HandleFunc("POST /api/v1/workloads", a.protected(a.createWorkload))
+	mux.HandleFunc("GET /api/v1/workloads/{id}", a.workload)
 	mux.HandleFunc("POST /api/v1/workloads/{id}/status", a.protected(a.updateWorkloadStatus))
 	mux.HandleFunc("DELETE /api/v1/workloads/{id}", a.protected(a.deleteWorkload))
+	mux.HandleFunc("GET /api/v1/services", a.services)
+	mux.HandleFunc("GET /api/v1/services/{name}", a.service)
+	mux.HandleFunc("GET /service/{name}/{path...}", a.serviceProxy)
 	mux.HandleFunc("GET /metrics", a.metrics)
 	mux.HandleFunc("GET /", a.dashboard)
 
@@ -55,8 +61,8 @@ func main() {
 		}
 	}()
 
-	srv := &http.Server{Addr: addr, Handler: requestLog(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
-	log.Printf("☁️  NXYZ Cloud control plane listening on %s", addr)
+	srv := &http.Server{Addr: addr, Handler: requestLog(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	log.Printf("☁️  NXYZ Cloud v1 control plane listening on %s", addr)
 	if a.token == "" {
 		log.Printf("⚠️  NXYZ_CLUSTER_TOKEN is unset; mutation endpoints are unauthenticated. Keep the API bound to localhost or set a token.")
 	}
@@ -66,12 +72,72 @@ func main() {
 }
 
 func (a *api) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, map[string]any{"status": "ok", "service": "nxyz-controlplane"})
+	writeJSON(w, 200, map[string]any{"status": "ok", "service": "nxyz-controlplane", "version": "1.0.0"})
 }
 func (a *api) system(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, a.cp.Summary()) }
 func (a *api) nodes(w http.ResponseWriter, _ *http.Request)  { writeJSON(w, 200, a.cp.ListNodes()) }
 func (a *api) workloads(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, a.cp.ListWorkloads())
+}
+func (a *api) services(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, a.cp.ListServices())
+}
+
+func (a *api) workload(w http.ResponseWriter, r *http.Request) {
+	item, err := a.cp.GetWorkload(r.PathValue("id"))
+	if errors.Is(err, cloud.ErrNotFound) {
+		writeError(w, 404, err)
+		return
+	}
+	if err != nil {
+		writeError(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (a *api) service(w http.ResponseWriter, r *http.Request) {
+	item, err := a.cp.FindService(r.PathValue("name"))
+	if errors.Is(err, cloud.ErrNotFound) {
+		writeError(w, 404, err)
+		return
+	}
+	if err != nil {
+		writeError(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (a *api) serviceProxy(w http.ResponseWriter, r *http.Request) {
+	item, err := a.cp.FindService(r.PathValue("name"))
+	if err != nil || item.Status != "running" || item.Endpoint == "" {
+		writeError(w, http.StatusServiceUnavailable, errors.New("service is not currently reachable"))
+		return
+	}
+	target, err := url.Parse(item.Endpoint)
+	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
+		writeError(w, http.StatusBadGateway, errors.New("service reported an invalid endpoint"))
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	original := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		original(req)
+		p := r.PathValue("path")
+		if p == "" {
+			p = "/"
+		} else if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		req.URL.Path = p
+		req.Host = target.Host
+	}
+	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, proxyErr error) {
+		log.Printf("service proxy %s: %v", item.Name, proxyErr)
+		writeError(rw, http.StatusBadGateway, errors.New("service upstream is unavailable"))
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 func (a *api) registerNode(w http.ResponseWriter, r *http.Request) {
@@ -170,8 +236,11 @@ func (a *api) metrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP nxyz_nodes_total Number of registered nodes.\n# TYPE nxyz_nodes_total gauge\nnxyz_nodes_total %d\n", s.Nodes)
 	fmt.Fprintf(w, "# HELP nxyz_nodes_healthy Number of healthy nodes.\n# TYPE nxyz_nodes_healthy gauge\nnxyz_nodes_healthy %d\n", s.HealthyNodes)
 	fmt.Fprintf(w, "# HELP nxyz_workloads_total Number of workloads tracked by the control plane.\n# TYPE nxyz_workloads_total gauge\nnxyz_workloads_total %d\n", s.Workloads)
+	fmt.Fprintf(w, "# HELP nxyz_workloads_running Running workloads.\n# TYPE nxyz_workloads_running gauge\nnxyz_workloads_running %d\n", s.RunningWorkloads)
+	fmt.Fprintf(w, "# HELP nxyz_services_published Reachable published services.\n# TYPE nxyz_services_published gauge\nnxyz_services_published %d\n", s.PublishedServices)
 	fmt.Fprintf(w, "# HELP nxyz_cpu_allocated_millicores Allocated CPU.\n# TYPE nxyz_cpu_allocated_millicores gauge\nnxyz_cpu_allocated_millicores %d\n", s.AllocatedCPU)
 	fmt.Fprintf(w, "# HELP nxyz_memory_allocated_mb Allocated memory.\n# TYPE nxyz_memory_allocated_mb gauge\nnxyz_memory_allocated_mb %d\n", s.AllocatedMemory)
+	fmt.Fprintf(w, "# HELP nxyz_disk_capacity_mb Advertised node disk capacity.\n# TYPE nxyz_disk_capacity_mb gauge\nnxyz_disk_capacity_mb %d\n", s.TotalDisk)
 }
 
 func (a *api) dashboard(w http.ResponseWriter, r *http.Request) {
