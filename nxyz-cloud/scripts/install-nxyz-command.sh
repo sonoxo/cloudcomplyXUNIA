@@ -43,15 +43,7 @@ case "\$cmd" in
     make local-up
     ;;
   status)
-    echo "☁️  NXYZ Cloud status"
-    if curl -fsS "\$CONTROL_PLANE/healthz" >/dev/null 2>&1; then
-      echo "✅ Control plane: online"
-      curl -fsS "\$CONTROL_PLANE/api/v1/nodes"
-      echo
-    else
-      echo "❌ Control plane: offline"
-      exit 1
-    fi
+    bash "\$NXYZ_DIR/scripts/nxyz-v1-tools.sh" info
     ;;
   dashboard|open)
     if [[ "\$(uname -s)" == "Darwin" ]]; then
@@ -63,8 +55,8 @@ case "\$cmd" in
   update)
     git pull --ff-only
     ;;
-  logs|tools|storage|deploy|db|database|monitor|backup|secrets|secret|registry|git|ai|agents|agent|dns|terminal|term|catalog|apps|proxy|mesh)
-    bash "\$NXYZ_DIR/scripts/nxyz-tools.sh" "\$@"
+  logs|tools|storage|deploy|db|database|monitor|backup|secrets|secret|registry|git|ai|agents|agent|dns|terminal|term|catalog|apps|proxy|mesh|services|service|doctor|info)
+    bash "\$NXYZ_DIR/scripts/nxyz-v1-tools.sh" "\$@"
     ;;
   path)
     printf '%s\n' "\$NXYZ_DIR"
@@ -75,36 +67,50 @@ case "\$cmd" in
     ;;
   help|-h|--help)
     cat <<'HELP'
-NXYZ Cloud CLI
+NXYZ Cloud v1 CLI
 
 Core
-  nxyz                Start/update NXYZ Cloud
-  nxyz status         Show cloud health and nodes
-  nxyz dashboard      Open the dashboard
-  nxyz restart        Restart local NXYZ services
-  nxyz stop           Stop local NXYZ services
-  nxyz update         Pull latest code
-  nxyz logs [ID]      Platform logs or workload logs
-  nxyz path           Print NXYZ directory
-  nxyz shell          Enter an NXYZ shell
+  nxyz                         Start/update NXYZ Cloud
+  nxyz status                  Cloud summary + published services
+  nxyz dashboard               Open the dashboard
+  nxyz doctor                  Verify runtime, controller and storage
+  nxyz restart                 Restart local NXYZ services
+  nxyz stop                    Stop local NXYZ services
+  nxyz update                  Pull latest code
+  nxyz logs [ID]               Platform logs or workload logs
+  nxyz path                    Print NXYZ directory
+  nxyz shell                   Enter an NXYZ shell
 
-Free Tool Plane
-  nxyz tools          Show installed NXYZ tools
-  nxyz storage ...    Object/file buckets
-  nxyz deploy ...     Deploy OCI images or Git repos
-  nxyz db ...         PostgreSQL databases
-  nxyz monitor        CPU/RAM/container metrics
-  nxyz backup ...     Backup and restore
-  nxyz secrets ...    Encrypted secrets
-  nxyz registry ...   Private OCI registry
-  nxyz git ...        Private Git repositories
-  nxyz ai ...         llama.cpp local AI API
-  nxyz agents ...     Agent workload launcher
-  nxyz dns ...        Service discovery records
-  nxyz terminal ID    Shell into a workload
-  nxyz catalog ...    App templates
-  nxyz proxy ...      Named route registry
-  nxyz mesh ...       Multi-node join/token flow
+Apps & services
+  nxyz deploy image NAME IMAGE [CPU] [MEM] [PORT] [HEALTH]
+  nxyz deploy git NAME URL [CPU] [MEM] [PORT] [HEALTH]
+  nxyz services                List published app endpoints
+  nxyz service open NAME       Open a published app directly
+  nxyz service proxy NAME      Open through the NXYZ reverse proxy
+  nxyz catalog list            Show one-command app templates
+  nxyz catalog install APP     Install a catalog app
+
+Data & platform
+  nxyz storage status          Total/free/NXYZ/Podman storage
+  nxyz storage ...             Object/file buckets
+  nxyz db ...                  PostgreSQL databases
+  nxyz backup ...              Backup and restore
+  nxyz secrets ...             Encrypted secrets
+  nxyz registry ...            Private OCI registry
+  nxyz git ...                 Private Git repositories
+  nxyz ai ...                  llama.cpp local AI API
+  nxyz agents ...              Agent workload launcher
+  nxyz terminal ID             Shell into a workload
+  nxyz monitor                 CPU/RAM/container metrics
+
+Network & scale
+  nxyz mesh enable             Make this PC the private mesh controller
+  nxyz mesh token              Show enrollment token
+  nxyz mesh join URL TOKEN     Join another PC to the cloud
+  nxyz mesh status             Show all cloud nodes
+  nxyz mesh disable            Return to local-only mode
+  nxyz dns ...                 Service discovery records
+  nxyz proxy ...               Named route registry
 HELP
     ;;
   *)
